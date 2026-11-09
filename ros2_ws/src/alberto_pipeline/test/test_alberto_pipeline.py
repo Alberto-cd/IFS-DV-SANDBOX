@@ -68,6 +68,24 @@ def test_planning_returns_a_path_from_the_car():
     assert np.allclose(path[0], [0.0, 0.0], atol=0.5)      # starts at the car
 
 
+def test_planning_stays_in_the_middle():
+    blue = np.array([[x, 1.5] for x in range(2, 20, 4)], dtype=float)
+    yellow = np.array([[x, -1.5] for x in range(2, 20, 4)], dtype=float)
+    colors = np.array([Cone.BLUE] * len(blue) + [Cone.YELLOW] * len(yellow), dtype=np.uint8)
+    path = np.asarray(plan(np.vstack((blue, yellow)), colors))
+    assert path[-1, 0] > 10.0                        # goes far ahead
+    assert np.all(np.abs(path[:, 1]) < 0.3)          # and stays between the edges
+
+
+def test_planning_works_without_colours():
+    blue = np.array([[x, 1.5] for x in range(2, 20, 4)], dtype=float)
+    yellow = np.array([[x, -1.5] for x in range(2, 20, 4)], dtype=float)
+    colors = np.full(len(blue) + len(yellow), Cone.UNKNOWN, dtype=np.uint8)
+    path = np.asarray(plan(np.vstack((blue, yellow)), colors))
+    assert path[-1, 0] > 10.0
+    assert np.all(np.abs(path[:, 1]) < 0.5)
+
+
 def test_planning_survives_no_cones():
     path = np.asarray(plan(np.empty((0, 2)), np.empty(0, dtype=np.uint8)))
     assert path.ndim == 2 and path.shape[1] == 2
