@@ -1,6 +1,6 @@
 """My PLANNING node.   sb-launch planning:=alberto_pipeline/planning
 
-Centre line between the two track edges.
+Centre line between the two track edges, robust to missing colours.
 """
 import math
 
@@ -13,7 +13,7 @@ from sandbox_msgs.msg import Cone, ConeArray
 
 from sandbox_tools import contract
 from sandbox_tools.node_utils import run
-from sandbox_tools.geometry import Pose2D, body_to_world, cones_to_numpy, world_to_body
+from sandbox_tools.geometry import Pose2D, body_to_world, colour_by_side, cones_to_numpy, world_to_body
 
 HORIZON = 20.0       # m, only use cones closer than this
 HALF_WIDTH = 1.5     # m, half the track width
@@ -104,6 +104,10 @@ def plan(cones_body: np.ndarray, colors: np.ndarray) -> np.ndarray:
     # Big orange gate cones sit on the edges too: left of the car = left edge.
     gate = side == Cone.ORANGE_BIG
     side[gate] = np.where(xy[gate, 1] > 0.0, Cone.BLUE, Cone.YELLOW)
+    # No colour (UNKNOWN, small orange)? Guess the edge from geometry.
+    unsure = (side != Cone.BLUE) & (side != Cone.YELLOW)
+    if unsure.any():
+        side[unsure] = colour_by_side(xy)[unsure]
     blue = order_edge(xy[side == Cone.BLUE])
     yellow = order_edge(xy[side == Cone.YELLOW])
     path = chain(centre_points(blue, yellow))
