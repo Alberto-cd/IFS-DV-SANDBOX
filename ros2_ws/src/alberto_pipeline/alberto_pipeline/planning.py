@@ -16,8 +16,36 @@ from sandbox_tools.node_utils import run
 from sandbox_tools.geometry import Pose2D, body_to_world, cones_to_numpy, world_to_body
 
 HORIZON = 20.0       # m, only use cones closer than this
+HALF_WIDTH = 1.5     # m, half the track width
 MAX_STEP = 6.0       # m, max gap between two centre points
 MAX_TURN = math.radians(50.0)
+
+
+def edge_normals(edge):
+    """Unit vector pointing LEFT of the driving direction at each cone of an ordered edge."""
+    if len(edge) < 2:
+        return np.tile((0.0, 1.0), (len(edge), 1))
+    t = np.gradient(edge, axis=0)
+    t /= np.maximum(np.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None]
+    return np.column_stack((-t[:, 1], t[:, 0]))
+
+
+def order_edge(edge):
+    """Sort the cones of one edge in driving order: start nearest the car, walk to the nearest next one."""
+    if len(edge) < 2:
+        return edge
+    left = list(range(len(edge)))
+    cur = min(left, key=lambda i: math.hypot(*edge[i]) - 2.0 * (edge[i][0] < 0))   # behind first
+    out = [cur]
+    left.remove(cur)
+    while left:
+        nxt = min(left, key=lambda i: np.hypot(*(edge[i] - edge[cur])))
+        if np.hypot(*(edge[nxt] - edge[cur])) > 8.0:
+            break
+        out.append(nxt)
+        left.remove(nxt)
+        cur = nxt
+    return edge[out]
 
 
 def centre_points(blue, yellow):
@@ -31,7 +59,15 @@ def centre_points(blue, yellow):
             j = int(np.argmin(d))
             if 2.0 < d[j] < 6.0:                            # plausible track width
                 pts.append((c + b[j]) / 2.0)
-    return np.array(pts) if pts else np.empty((0, 2))
+    if len(pts) >= 3:
+        return np.array(pts)
+    # One edge only (or a broken pairing): step half a track width inwards,
+    # perpendicular to the edge (not just sideways in y: that's wrong in a bend).
+    if len(blue) >= len(yellow) and len(blue):
+        return blue - HALF_WIDTH * edge_normals(blue)
+    if len(yellow):
+        return yellow + HALF_WIDTH * edge_normals(yellow)
+    return np.empty((0, 2))
 
 
 def chain(mids):
@@ -68,8 +104,8 @@ def plan(cones_body: np.ndarray, colors: np.ndarray) -> np.ndarray:
     # Big orange gate cones sit on the edges too: left of the car = left edge.
     gate = side == Cone.ORANGE_BIG
     side[gate] = np.where(xy[gate, 1] > 0.0, Cone.BLUE, Cone.YELLOW)
-    blue = xy[side == Cone.BLUE]
-    yellow = xy[side == Cone.YELLOW]
+    blue = order_edge(xy[side == Cone.BLUE])
+    yellow = order_edge(xy[side == Cone.YELLOW])
     path = chain(centre_points(blue, yellow))
     return path if len(path) >= 2 else straight
 
