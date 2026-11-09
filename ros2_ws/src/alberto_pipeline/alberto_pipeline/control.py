@@ -1,11 +1,9 @@
 """My CONTROL node.   sb-launch control:=alberto_pipeline/control
 
-  in : /sandbox/path      nav_msgs/Path (map)
-       /sandbox/pose      Odometry (map -> base_link), twist.linear.x = speed
-  out: /control_command   fs_msgs/ControlCommand: throttle [0,1], brake [0,1], steering [-1,1] (+ = RIGHT)
-
-Everything inside compute() is yours. Wheelbase 1.627 m, max steer 22.4 deg.
+Pure pursuit for steering, one constant target speed.
 """
+import math
+
 import numpy as np
 import rclpy
 from fs_msgs.msg import ControlCommand
@@ -16,13 +14,53 @@ from sandbox_tools import contract
 from sandbox_tools.node_utils import run
 from sandbox_tools.geometry import Pose2D, world_to_body
 
+WHEELBASE = 1.627                 # m
+MAX_STEER = math.radians(22.4)    # steering = 1.0 means this angle at the wheels
+
+# Tuning (start here, then tune in IFSSIM)
+TARGET_SPEED = 3.0   # m/s, same as the baseline
+LD_MIN = 2.0         # m, lookahead at standstill
+LD_GAIN = 0.35       # s, extra lookahead per m/s
+LD_MAX = 6.0         # m
+KP = 0.3             # speed P controller
+
+
+def resample(path, step=0.25):
+    """Same path, points every `step` metres (the planner's points can be far apart)."""
+    seg = np.hypot(*np.diff(path, axis=0).T)
+    s = np.concatenate(([0.0], np.cumsum(seg)))
+    if s[-1] < step:
+        return path
+    t = np.arange(0.0, s[-1], step)
+    return np.column_stack((np.interp(t, s, path[:, 0]), np.interp(t, s, path[:, 1])))
+
+
+def point_at_distance(path, ld):
+    """First path point at least `ld` metres from the car and in front of it."""
+    d = np.hypot(path[:, 0], path[:, 1])
+    ok = np.flatnonzero((d >= ld) & (path[:, 0] > 0.0))
+    return path[ok[0]] if len(ok) else path[-1]
+
 
 def compute(path_body: np.ndarray, speed: float):
-    """Path in the car frame + current speed -> (throttle, steering, brake).
+    """Path in the car frame + current speed -> (throttle, steering, brake). steering + = left."""
+    if len(path_body) < 2:
+        return 0.0, 0.0, 1.0
+    path = resample(path_body)
 
-    steering: + = left, like y in the car frame. tick() flips it for /control_command.
-    """
-    return 0.0, 0.0, 1.0   # stand still. Replace me!
+    # Lateral: pure pursuit, lookahead grows with speed
+    ld = min(LD_MIN + LD_GAIN * speed, LD_MAX)
+    tx, ty = point_at_distance(path, ld)
+    alpha = math.atan2(ty, tx)
+    kappa = 2.0 * math.sin(alpha) / max(math.hypot(tx, ty), 0.1)
+    steer = float(np.clip(math.atan(WHEELBASE * kappa) / MAX_STEER, -1.0, 1.0))
+
+    # Longitudinal: P on speed, towards one constant speed
+    err = TARGET_SPEED - speed
+    u = KP * err
+    throttle = float(np.clip(u, 0.0, 1.0))
+    brake = float(np.clip(-u, 0.0, 1.0)) if err < -0.3 else 0.0
+    return throttle, steer, brake
 
 
 class Control(Node):
