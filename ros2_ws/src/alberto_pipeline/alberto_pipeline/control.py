@@ -1,6 +1,6 @@
 """My CONTROL node.   sb-launch control:=alberto_pipeline/control
 
-Pure pursuit for steering, one constant target speed.
+Pure pursuit for steering + speed profile from the path's curvature.
 """
 import math
 
@@ -19,14 +19,16 @@ MAX_STEER = math.radians(22.4)    # steering = 1.0 means this angle at the wheel
 DT = 1.0 / 40.0                   # tick() runs at 40 Hz
 
 # Tuning (start here, then tune in IFSSIM)
-TARGET_SPEED = 3.0   # m/s, same as the baseline
+V_MAX = 6.0          # m/s on the straights
+A_LAT = 3.0          # m/s², max sideways acceleration in a bend (lower = slower corners)
+A_BRAKE = 2.5        # m/s², how hard we plan to slow down before a bend
 LD_MIN = 2.0         # m, lookahead at standstill
 LD_GAIN = 0.35       # s, extra lookahead per m/s
 LD_MAX = 6.0         # m
 STEER_RATE = 2.5     # max change of the steering command per second (full lock in 0.4 s)
-KP = 0.3             # speed P controller
+KP, KI = 0.4, 0.15   # speed PI controller
 
-_state = {"steer": 0.0}   # remembered between ticks
+_state = {"steer": 0.0, "i": 0.0}   # remembered between ticks
 
 
 def resample(path, step=0.25):
@@ -46,9 +48,29 @@ def point_at_distance(path, ld):
     return path[ok[0]] if len(ok) else path[-1]
 
 
+def curvature(path, gap=6):
+    """|curvature| (1/m) at each point, from the circle through 3 points `gap` apart."""
+    k = np.zeros(len(path))
+    for i in range(gap, len(path) - gap):
+        a, b, c = path[i - gap], path[i], path[i + gap]
+        area2 = abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]))
+        abc = np.linalg.norm(b - a) * np.linalg.norm(c - b) * np.linalg.norm(c - a)
+        k[i] = 2.0 * area2 / max(abc, 1e-6)
+    return k
+
+
+def target_speed(path):
+    """Fastest speed now that still lets us slow down in time for every bend ahead."""
+    k = curvature(path)
+    v_bend = np.minimum(V_MAX, np.sqrt(A_LAT / np.maximum(k, 1e-3)))
+    s = np.arange(len(path)) * 0.25                         # distance to each point
+    return float(np.min(np.sqrt(v_bend ** 2 + 2.0 * A_BRAKE * s)))
+
+
 def compute(path_body: np.ndarray, speed: float):
     """Path in the car frame + current speed -> (throttle, steering, brake). steering + = left."""
     if len(path_body) < 2:
+        _state["i"] = 0.0
         return 0.0, 0.0, 1.0
     path = resample(path_body)
 
@@ -63,9 +85,11 @@ def compute(path_body: np.ndarray, speed: float):
     steer = _state["steer"] + float(np.clip(steer - _state["steer"], -step, step))
     _state["steer"] = steer
 
-    # Longitudinal: P on speed, towards one constant speed
-    err = TARGET_SPEED - speed
-    u = KP * err
+    # Longitudinal: speed profile from the path's curvature + PI on speed
+    v_ref = target_speed(path)
+    err = v_ref - speed
+    _state["i"] = float(np.clip(_state["i"] + err * DT, -2.0, 2.0))
+    u = KP * err + KI * _state["i"]
     throttle = float(np.clip(u, 0.0, 1.0))
     brake = float(np.clip(-u, 0.0, 1.0)) if err < -0.3 else 0.0
     return throttle, steer, brake
