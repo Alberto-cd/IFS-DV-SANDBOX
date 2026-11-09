@@ -1,11 +1,9 @@
 """My PLANNING node.   sb-launch planning:=alberto_pipeline/planning
 
-  in : /sandbox/map    ConeArray (map)
-       /sandbox/pose   Odometry (map -> base_link)
-  out: /sandbox/path   nav_msgs/Path (map), first point = the car
-
-Everything inside plan() is yours.
+Centre line between the two track edges.
 """
+import math
+
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped
@@ -17,10 +15,63 @@ from sandbox_tools import contract
 from sandbox_tools.node_utils import run
 from sandbox_tools.geometry import Pose2D, body_to_world, cones_to_numpy, world_to_body
 
+HORIZON = 20.0       # m, only use cones closer than this
+MAX_STEP = 6.0       # m, max gap between two centre points
+MAX_TURN = math.radians(50.0)
+
+
+def centre_points(blue, yellow):
+    """Candidate points on the centre line, from both edges."""
+    pts = []
+    for a, b in ((blue, yellow), (yellow, blue)):          # pair from both sides -> denser line
+        for c in a:
+            if len(b) == 0:
+                break
+            d = np.hypot(*(b - c).T)
+            j = int(np.argmin(d))
+            if 2.0 < d[j] < 6.0:                            # plausible track width
+                pts.append((c + b[j]) / 2.0)
+    return np.array(pts) if pts else np.empty((0, 2))
+
+
+def chain(mids):
+    """From the car, keep jumping to the closest centre point ahead that doesn't turn too sharply."""
+    path, heading, rest = [np.zeros(2)], 0.0, list(mids)
+    while rest:
+        cur = path[-1]
+        best, best_d = None, MAX_STEP
+        for k, m in enumerate(rest):
+            v = m - cur
+            d = math.hypot(*v)
+            turn = abs((math.atan2(v[1], v[0]) - heading + math.pi) % (2 * math.pi) - math.pi)
+            if 0.5 < d < best_d and turn < MAX_TURN:
+                best, best_d = k, d
+        if best is None:
+            break
+        nxt = rest.pop(best)
+        heading = math.atan2(nxt[1] - cur[1], nxt[0] - cur[0])
+        path.append(nxt)
+        # drop the leftovers right next to the point we just used (pairs from both sides)
+        rest = [m for m in rest if math.hypot(*(m - nxt)) > 1.0]
+    return np.array(path)
+
 
 def plan(cones_body: np.ndarray, colors: np.ndarray) -> np.ndarray:
     """Cones in the car frame -> path points (K, 2) in the car frame, starting at (0, 0)."""
-    return np.array([[0.0, 0.0], [5.0, 0.0]])   # straight ahead. Replace me!
+    straight = np.array([[0.0, 0.0], [3.0, 0.0]])
+    if len(cones_body) == 0:
+        return straight
+    near = (np.hypot(cones_body[:, 0], cones_body[:, 1]) < HORIZON) & (cones_body[:, 0] > -3.0)
+    xy, side = cones_body[near], colors[near].copy()
+    if len(xy) < 2:
+        return straight
+    # Big orange gate cones sit on the edges too: left of the car = left edge.
+    gate = side == Cone.ORANGE_BIG
+    side[gate] = np.where(xy[gate, 1] > 0.0, Cone.BLUE, Cone.YELLOW)
+    blue = xy[side == Cone.BLUE]
+    yellow = xy[side == Cone.YELLOW]
+    path = chain(centre_points(blue, yellow))
+    return path if len(path) >= 2 else straight
 
 
 class Planning(Node):
