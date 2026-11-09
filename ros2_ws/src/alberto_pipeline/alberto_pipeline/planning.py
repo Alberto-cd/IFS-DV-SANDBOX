@@ -19,6 +19,7 @@ HORIZON = 20.0       # m, only use cones closer than this
 HALF_WIDTH = 1.5     # m, half the track width
 MAX_STEP = 6.0       # m, max gap between two centre points
 MAX_TURN = math.radians(50.0)
+STEP = 0.5           # m, spacing of the published path
 
 
 def edge_normals(edge):
@@ -92,6 +93,23 @@ def chain(mids):
     return np.array(path)
 
 
+def smooth(path, window=5):
+    """Resample every STEP metres and average neighbours. The first point stays at the car."""
+    if len(path) < 3:
+        return path
+    seg = np.hypot(*np.diff(path, axis=0).T)
+    s = np.concatenate(([0.0], np.cumsum(seg)))
+    t = np.arange(0.0, s[-1], STEP)
+    p = np.column_stack((np.interp(t, s, path[:, 0]), np.interp(t, s, path[:, 1])))
+    if len(p) <= window:
+        return p
+    k = np.ones(window) / window
+    pad = np.vstack([p[:1]] * (window // 2) + [p] + [p[-1:]] * (window // 2))
+    out = np.column_stack([np.convolve(pad[:, i], k, mode="valid") for i in (0, 1)])
+    out[0] = (0.0, 0.0)
+    return out
+
+
 def plan(cones_body: np.ndarray, colors: np.ndarray) -> np.ndarray:
     """Cones in the car frame -> path points (K, 2) in the car frame, starting at (0, 0)."""
     straight = np.array([[0.0, 0.0], [3.0, 0.0]])
@@ -111,7 +129,7 @@ def plan(cones_body: np.ndarray, colors: np.ndarray) -> np.ndarray:
     blue = order_edge(xy[side == Cone.BLUE])
     yellow = order_edge(xy[side == Cone.YELLOW])
     path = chain(centre_points(blue, yellow))
-    return path if len(path) >= 2 else straight
+    return smooth(path) if len(path) >= 2 else straight
 
 
 class Planning(Node):
