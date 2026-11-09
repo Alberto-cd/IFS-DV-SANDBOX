@@ -519,3 +519,27 @@ Then the same with `--scenario ifssim-A`.
   ```bash
   ros2 param set /gt_cones unknown_rate 1.0
   ```
+
+---
+
+## How this was tested
+
+The code above (copied exactly from this page into a package) was run with
+`sb-score` on the **mock**, all three tracks. It has **not** been run in
+IFSSIM yet: expect to tune `A_LAT` and `V_MAX` there (see
+[Tuning in IFSSIM](#tuning-in-ifssim)).
+
+| Setup (mock) | Track A | Track B | Track C |
+|---|---|---|---|
+| ★ Baseline, perfect cones (reference) | 186.0 s, 0 cones | 124.7 s, 0 cones | 143.5 s, 0 cones |
+| Level 1: **this control**, perfect cones | 91.7 s, 0 cones | 60.9 s, 0 cones | 70.3 s, 0 cones |
+| Level 2: **this planning + this control**, `--gt-noise` | 89.4 s, 0 cones | 59.6 s, 0 cones | 68.6 s, 0 cones |
+
+Control score 88–89 and Planning score 90–91 in every run, the same as the
+baseline: these score how centred and smooth the car is, not lap time.
+
+No colours at all (`unknown_rate 1.0`, track B, launched by hand): this
+planning finished the lap in 59.4 s with 0 cones. With the baseline planning
+the car stayed stopped.
+
+These are mock times. IFSSIM has less grip, so expect slower laps there.
