@@ -16,13 +16,17 @@ from sandbox_tools.geometry import Pose2D, world_to_body
 
 WHEELBASE = 1.627                 # m
 MAX_STEER = math.radians(22.4)    # steering = 1.0 means this angle at the wheels
+DT = 1.0 / 40.0                   # tick() runs at 40 Hz
 
 # Tuning (start here, then tune in IFSSIM)
 TARGET_SPEED = 3.0   # m/s, same as the baseline
 LD_MIN = 2.0         # m, lookahead at standstill
 LD_GAIN = 0.35       # s, extra lookahead per m/s
 LD_MAX = 6.0         # m
+STEER_RATE = 2.5     # max change of the steering command per second (full lock in 0.4 s)
 KP = 0.3             # speed P controller
+
+_state = {"steer": 0.0}   # remembered between ticks
 
 
 def resample(path, step=0.25):
@@ -54,6 +58,10 @@ def compute(path_body: np.ndarray, speed: float):
     alpha = math.atan2(ty, tx)
     kappa = 2.0 * math.sin(alpha) / max(math.hypot(tx, ty), 0.1)
     steer = float(np.clip(math.atan(WHEELBASE * kappa) / MAX_STEER, -1.0, 1.0))
+    # Rate limit: no jumps when the path flickers between two planner updates
+    step = STEER_RATE * DT
+    steer = _state["steer"] + float(np.clip(steer - _state["steer"], -step, step))
+    _state["steer"] = steer
 
     # Longitudinal: P on speed, towards one constant speed
     err = TARGET_SPEED - speed
