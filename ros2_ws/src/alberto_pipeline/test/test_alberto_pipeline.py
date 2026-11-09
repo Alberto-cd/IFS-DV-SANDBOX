@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 from sandbox_msgs.msg import Cone
 
+from alberto_pipeline import control
 from alberto_pipeline.control import compute
 from alberto_pipeline.perception import find_cones
 from alberto_pipeline.planning import plan
@@ -32,10 +33,26 @@ def test_control_outputs_are_in_range(path, speed):
     assert 0.0 <= brake <= 1.0
 
 
-@pytest.mark.skip(reason="turn on (delete this line) once your compute() steers")
 def test_control_steers_left_on_a_left_bend():
     _, steering, _ = compute(LEFT_BEND, 5.0)
     assert steering > 0.0          # + = left
+
+
+def test_control_steers_right_on_a_right_bend():
+    control._state.update(steer=0.0, i=0.0)
+    _, steering, _ = compute(LEFT_BEND * (1.0, -1.0), 5.0)
+    assert steering < 0.0
+
+
+def test_control_slows_down_for_a_bend():
+    s = np.linspace(0.0, 20.0, 81)
+    bend = np.column_stack((4.0 * np.sin(s / 4.0), 4.0 - 4.0 * np.cos(s / 4.0)))   # radius 4 m
+    assert control.target_speed(control.resample(bend)) < control.target_speed(control.resample(STRAIGHT))
+
+
+def test_control_brakes_without_a_path():
+    throttle, _, brake = compute(np.zeros((1, 2)), 3.0)
+    assert throttle == 0.0 and brake == 1.0
 
 
 # ---------- planning ----------
